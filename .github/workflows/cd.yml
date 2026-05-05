@@ -1,19 +1,25 @@
 name: CD — upload-service
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI — upload-service"]
     branches: [main]
+    types:
+      - completed
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: upload-service
-  SERVICE_NAME: upload-service
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
 
 jobs:
   prepare:
     name: Prepare Release
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     outputs:
       image_tag: ${{ steps.version.outputs.image_tag }}
     steps:
@@ -48,6 +54,8 @@ jobs:
     name: Build and Publish Image
     runs-on: ubuntu-latest
     needs: prepare
+    outputs:
+      image_uri: ${{ steps.publish_image.outputs.image_uri }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -84,8 +92,8 @@ jobs:
             echo "| Image | ${{ steps.publish_image.outputs.image_uri }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  update-terraform:
-    name: Update Terraform Cloud
+  deploy:
+    name: Deploy to ECS Fargate
     runs-on: ubuntu-latest
     needs: [prepare, publish]
     steps:
@@ -96,51 +104,44 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Resolve ECR registry
-        id: registry
+      - name: Download ECS task definition
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "registry=${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_OUTPUT
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query "services[0].taskDefinition" \
+            --output text)
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --query taskDefinition > task-definition.json
 
-      - name: Update Terraform Cloud variable
-        id: tfc_update
-        env:
-          TFC_TOKEN: ${{ secrets.TFC_TOKEN }}
-          TFC_WORKSPACE_ID: ${{ secrets.TFC_WORKSPACE_ID }}
-          TFC_VAR_ID: ${{ secrets.TFC_UPLOAD_VAR_ID }}
-          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
-          REGISTRY: ${{ steps.registry.outputs.registry }}
-        run: |
-          IMAGE_URI=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          curl -sS \
-            -H "Authorization: Bearer $TFC_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            -X PATCH \
-            https://app.terraform.io/api/v2/workspaces/$TFC_WORKSPACE_ID/vars/$TFC_VAR_ID \
-            -d '{"data":{"id":"'$TFC_VAR_ID'","type":"vars","attributes":{"value":"'$IMAGE_URI'"}}}'
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+      - name: Update ECS task definition with new image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ needs.publish.outputs.image_uri }}
 
-      - name: Trigger Terraform Cloud run
-        id: tfc_run
-        env:
-          TFC_TOKEN: ${{ secrets.TFC_TOKEN }}
-          TFC_WORKSPACE_ID: ${{ secrets.TFC_WORKSPACE_ID }}
-        run: |
-          curl -sS \
-            -H "Authorization: Bearer $TFC_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            -X POST \
-            https://app.terraform.io/api/v2/runs \
-            -d '{"data":{"type":"runs","attributes":{"message":"CD update for upload-service"},"relationships":{"workspace":{"data":{"type":"workspaces","id":"'$TFC_WORKSPACE_ID'"}}}}}'
+      - name: Deploy to ECS
+        id: ecs_deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
 
-      - name: CD Terraform Summary
+      - name: CD Deploy Summary
         if: always()
         run: |
           {
-            echo "## CD Summary - Terraform"
+            echo "## CD Summary - ECS Deploy"
             echo
             echo "| Item | Valor |"
             echo "|---|---|"
-            echo "| Image | ${{ steps.tfc_update.outputs.image_uri }} |"
-            echo "| Workspace | ${{ secrets.TFC_WORKSPACE_ID }} |"
+            echo "| Image | ${{ needs.publish.outputs.image_uri }} |"
+            echo "| Service | ${{ env.ECS_SERVICE }} |"
+            echo "| Cluster | ${{ env.ECS_CLUSTER }} |"
+            echo "| Result | ${{ steps.ecs_deploy.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
