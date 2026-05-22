@@ -1,4 +1,4 @@
-# fiap-upload-service
+# fiap-hackaton-upload-service
 
 Microsserviço responsável por:
 - Receber diagramas de arquitetura (PNG, JPG, JPEG, PDF) via REST
@@ -10,7 +10,7 @@ Microsserviço responsável por:
 
 ## Contrato de API
 
-Documentação completa: [`fiap-infrastructure/docs/api/upload-service-api.yaml`](https://github.com/org/fiap-infrastructure/blob/main/docs/api/upload-service-api.yaml)
+Documentação completa: [`fiap-hackaton-infrastructure/docs/api/upload-service-api.yaml`](https://github.com/org/fiap-hackaton-infrastructure/blob/main/docs/api/upload-service-api.yaml)
 
 ### Endpoints
 
@@ -26,7 +26,7 @@ http://localhost:8080/swagger-ui.html
 ## Desenvolvimento local
 
 ```bash
-# Pré-requisito: infraestrutura rodando (ver fiap-infrastructure)
+# Pré-requisito: infraestrutura rodando (ver fiap-hackaton-infrastructure)
 # Compilar e rodar
 mvn spring-boot:run
 
@@ -39,7 +39,7 @@ mvn clean verify
 
 ## Como rodar com Docker Compose
 
-Este serviço eh executado via `docker compose` no repositório de infraestrutura (`fiap-infrastructure`).
+Este serviço eh executado via `docker compose` no repositório de infraestrutura (`fiap-hackaton-infrastructure`).
 O Compose sobe:
 - `localstack` (S3 + SQS)
 - `upload-db` (PostgreSQL)
@@ -53,18 +53,18 @@ O Compose sobe:
 
 ```text
 Hackaton/
-├── fiap-upload-service/
-├── fiap-processing-service/
-├── fiap-report-service/
-└── fiap-infrastructure/
+├── fiap-hackaton-upload-service/
+├── fiap-hackaton-processing-service/
+├── fiap-hackaton-report-service/
+└── fiap-hackaton-infrastructure/
 ```
 
 ### 2) Subir dependências e API
 
-No diretório `fiap-infrastructure`:
+No diretório `fiap-hackaton-infrastructure`:
 
 ```bash
-cd ../fiap-infrastructure
+cd ../fiap-hackaton-infrastructure
 
 # Sobe os serviços necessários para o upload-service
 docker compose up -d localstack upload-db upload-service
@@ -118,7 +118,7 @@ curl "http://localhost:8080/v1/jobs/<jobId>/status"
 
 ### 5) Rebuild da API apos alterar codigo
 
-Sempre execute no `fiap-infrastructure`:
+Sempre execute no `fiap-hackaton-infrastructure`:
 
 ```bash
 docker compose up -d --build upload-service
@@ -150,7 +150,7 @@ Causa:
 Como resolver:
 
 ```bash
-cd ../fiap-infrastructure
+cd ../fiap-hackaton-infrastructure
 docker compose down -v --remove-orphans
 docker compose up -d localstack upload-db upload-service
 ```
@@ -172,16 +172,16 @@ docker compose up -d upload-service
 
 #### Confirmar que o Compose esta usando o Dockerfile correto
 
-No `fiap-infrastructure/docker-compose.yml`, o servico esta configurado assim:
+No `fiap-hackaton-infrastructure/docker-compose.yml`, o servico esta configurado assim:
 
 ```yaml
 upload-service:
   build:
-    context: ../fiap-upload-service
+    context: ../fiap-hackaton-upload-service
     dockerfile: Dockerfile
 ```
 
-Ou seja, sim: o arquivo `fiap-upload-service/Dockerfile` eh o Dockerfile usado pelo Compose.
+Ou seja, sim: o arquivo `fiap-hackaton-upload-service/Dockerfile` eh o Dockerfile usado pelo Compose.
 
 ## Estrutura (Arquitetura Hexagonal)
 
