@@ -1,4 +1,8 @@
-# fiap-hackaton-upload-service
+[🇧🇷 Português](#-fiap-hackaton-upload-service) | [🇦🇺 English](#-fiap-hackaton-upload-service-1)
+
+---
+
+# 🇧🇷 fiap-hackaton-upload-service
 
 Microsserviço responsável por:
 - Receber diagramas de arquitetura (PNG, JPG, JPEG, PDF) via REST
@@ -215,3 +219,231 @@ src/main/java/br/com/fiap/upload/
 | `AWS_ENDPOINT_OVERRIDE` | *(vazio)* | URL do LocalStack para dev local |
 | `S3_BUCKET_NAME` | `fiap-diagrams` | Nome do bucket S3 |
 | `SQS_QUEUE_URL` | `http://localhost:4566/...` | URL da fila SQS |
+
+---
+
+[⬆️ Back to top / Voltar ao topo](#-fiap-hackaton-upload-service)
+
+---
+
+# 🇦🇺 fiap-hackaton-upload-service
+
+Microservice responsible for:
+- Receiving architecture diagrams (PNG, JPG, JPEG, PDF) via REST
+- Storing files in AWS S3
+- Creating and managing analysis jobs with status tracking
+- Publishing messages to the AWS SQS queue to trigger processing
+
+**Owner**: Person 1
+
+## API Contract
+
+Full documentation: [`fiap-hackaton-infrastructure/docs/api/upload-service-api.yaml`](https://github.com/org/fiap-hackaton-infrastructure/blob/main/docs/api/upload-service-api.yaml)
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/uploads` | Diagram upload |
+| `GET` | `/v1/jobs/{jobId}/status` | Processing status |
+
+### Swagger UI (local)
+
+http://localhost:8080/swagger-ui.html
+
+## Local Development
+
+```bash
+# Prerequisite: infrastructure running (see fiap-hackaton-infrastructure)
+# Build and run
+mvn spring-boot:run
+
+# Run tests
+mvn test
+
+# Full build
+mvn clean verify
+```
+
+## Running with Docker Compose
+
+This service runs via `docker compose` in the infrastructure repository (`fiap-hackaton-infrastructure`).
+Compose brings up:
+- `localstack` (S3 + SQS)
+- `upload-db` (PostgreSQL)
+- `upload-service` (this API, using this `Dockerfile`)
+
+### 1) Prerequisites
+
+- Docker Desktop running
+- Docker Compose v2 (`docker compose version`)
+- Repositories as sibling folders in the same directory:
+
+```text
+Hackaton/
+├── fiap-hackaton-upload-service/
+├── fiap-hackaton-processing-service/
+├── fiap-hackaton-report-service/
+└── fiap-hackaton-infrastructure/
+```
+
+### 2) Start dependencies and the API
+
+From the `fiap-hackaton-infrastructure` directory:
+
+```bash
+cd ../fiap-hackaton-infrastructure
+
+# Starts the services required by upload-service
+docker compose up -d localstack upload-db upload-service
+```
+
+### 3) Verify everything started correctly
+
+```bash
+docker compose ps
+```
+
+Expected state:
+- `fiap-localstack`: `healthy`
+- `fiap-upload-db`: `healthy`
+- `fiap-upload-service`: `healthy` (port `8080:8080`)
+
+API health check:
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "UP"
+}
+```
+
+Local Swagger:
+- http://localhost:8080/swagger-ui.html
+
+### 4) Quick usage test (simulating a user)
+
+Upload a file:
+
+```bash
+echo "SIMULATED_PNG_DATA" > /tmp/diagrama.png
+
+curl -X POST "http://localhost:8080/v1/uploads" \
+  -F "file=@/tmp/diagrama.png;type=image/png" \
+  -F "description=Architecture diagram"
+```
+
+Check status:
+
+```bash
+curl "http://localhost:8080/v1/jobs/<jobId>/status"
+```
+
+### 5) Rebuilding the API after changing code
+
+Always run this from `fiap-hackaton-infrastructure`:
+
+```bash
+docker compose up -d --build upload-service
+```
+
+### 6) Stopping the environment
+
+```bash
+docker compose stop upload-service upload-db localstack
+```
+
+To remove containers and volumes (full environment reset):
+
+```bash
+docker compose down -v --remove-orphans
+```
+
+### 7) Troubleshooting
+
+#### Flyway error: non-empty schema without `flyway_schema_history`
+
+Symptom:
+- the API starts and crashes right at startup
+- message containing `Found non-empty schema(s) "public" but no schema history table`
+
+Cause:
+- the database was initialized with a legacy schema and Flyway then tried to take control.
+
+How to fix it:
+
+```bash
+cd ../fiap-hackaton-infrastructure
+docker compose down -v --remove-orphans
+docker compose up -d localstack upload-db upload-service
+```
+
+#### Port already in use error (`bind: address already in use` on 8080)
+
+Cause:
+- another instance of the API is already running (e.g. `mvn spring-boot:run`).
+
+How to fix it:
+
+```bash
+# stop the local instance occupying port 8080
+pkill -f "spring-boot:run"
+
+# bring it back up via compose
+docker compose up -d upload-service
+```
+
+#### Confirming Compose is using the correct Dockerfile
+
+In `fiap-hackaton-infrastructure/docker-compose.yml`, the service is configured like this:
+
+```yaml
+upload-service:
+  build:
+    context: ../fiap-hackaton-upload-service
+    dockerfile: Dockerfile
+```
+
+So yes: the `fiap-hackaton-upload-service/Dockerfile` file is the Dockerfile used by Compose.
+
+## Structure (Hexagonal Architecture)
+
+```
+src/main/java/br/com/fiap/upload/
+├── domain/
+│   ├── model/          # Job, JobStatus, DiagramFile
+│   └── port/
+│       ├── in/         # UploadDiagramUseCase, GetJobStatusUseCase
+│       └── out/        # JobRepository, FileStoragePort, MessageQueuePort
+├── application/
+│   └── usecase/        # UploadDiagramUseCaseImpl, GetJobStatusUseCaseImpl
+├── adapter/
+│   ├── in/
+│   │   ├── web/        # UploadController
+│   │   └── dto/        # UploadRequest, UploadResponse, JobStatusResponse
+│   └── out/
+│       ├── persistence/ # JobJpaRepository, JobEntity
+│       └── aws/         # S3FileStorageAdapter, SqsMessageQueueAdapter
+└── config/             # AwsConfig, OpenApiConfig
+```
+
+## Environment Variables
+
+| Variable | Default (local) | Description |
+|---|---|---|
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/upload_db` | Database URL |
+| `SPRING_DATASOURCE_USERNAME` | `upload_user` | Database user |
+| `SPRING_DATASOURCE_PASSWORD` | `upload_pass` | Database password |
+| `AWS_REGION` | `us-east-1` | AWS region |
+| `AWS_ENDPOINT_OVERRIDE` | *(empty)* | LocalStack URL for local dev |
+| `S3_BUCKET_NAME` | `fiap-diagrams` | S3 bucket name |
+| `SQS_QUEUE_URL` | `http://localhost:4566/...` | SQS queue URL |
+
+---
+
+[⬆️ Back to top / Voltar ao topo](#-fiap-hackaton-upload-service)
